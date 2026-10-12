@@ -1,0 +1,213 @@
+### LipariBank — Giorno 5 (REST Client per VS Code)
+# Esegui le richieste in ordine: i POST salvano l'id che viene riusato dalle successive.
+# Ogni risposta ha l'header X-Request-Id: cercalo nei log del server per la correlation.
+@baseUrl = http://localhost:3000/api
+
+#####################################################################
+# CUSTOMER
+#####################################################################
+
+### 1. POST /customers → 201
+# @name createCustomer
+POST {{baseUrl}}/customers
+Content-Type: application/json
+
+{
+  "fiscalCode": "RSSMRA80A01H501U",
+  "firstName": "Mario",
+  "lastName": "Rossi",
+  "email": "mario.rossi@example.com",
+  "phone": "+39 333 1234567"
+}
+
+### 2. GET /customers → 200
+GET {{baseUrl}}/customers
+
+### 3. GET /customers/:id → 200
+GET {{baseUrl}}/customers/{{createCustomer.response.body.data.id}}
+
+### 4. PUT /customers/:id → 200
+PUT {{baseUrl}}/customers/{{createCustomer.response.body.data.id}}
+Content-Type: application/json
+
+{
+  "email": "m.rossi@liparibank.it",
+  "status": "INACTIVE"
+}
+
+#####################################################################
+# ACCOUNT (ownerId = customer creato sopra)
+#####################################################################
+
+### 5. POST /accounts → 201
+# @name createAccount
+POST {{baseUrl}}/accounts
+Content-Type: application/json
+
+{
+  "ownerId": "{{createCustomer.response.body.data.id}}",
+  "iban": "IT60X0542811101000000123456",
+  "type": "CHECKING",
+  "initialBalance": 1500
+}
+
+### 6. GET /accounts → 200
+GET {{baseUrl}}/accounts
+
+### 7. GET /accounts/:id → 200
+GET {{baseUrl}}/accounts/{{createAccount.response.body.data.id}}
+
+### 8. PUT /accounts/:id → 200
+PUT {{baseUrl}}/accounts/{{createAccount.response.body.data.id}}
+Content-Type: application/json
+
+{
+  "type": "SAVINGS"
+}
+
+#####################################################################
+# CASI DI ERRORE (verifica G4)
+#####################################################################
+
+### POST /accounts con body invalido → 422 VALIDATION_ERROR con details per campo
+POST {{baseUrl}}/accounts
+Content-Type: application/json
+
+{ "ownerId": "non-uuid", "iban": "IT00", "type": "DEPOSIT", "initialBalance": -50 }
+
+### GET /accounts/non-esiste → 404 NOT_FOUND
+GET {{baseUrl}}/accounts/non-esiste
+
+### POST /accounts IBAN duplicato → 409 CONFLICT
+POST {{baseUrl}}/accounts
+Content-Type: application/json
+
+{ "ownerId": "{{createCustomer.response.body.data.id}}", "iban": "IT60X0542811101000000123456", "type": "SAVINGS" }
+
+### POST /customers codice fiscale duplicato → 409 CONFLICT
+POST {{baseUrl}}/customers
+Content-Type: application/json
+
+{ "fiscalCode": "rssmra80a01h501u", "firstName": "Maria", "lastName": "Rossi", "email": "maria@example.com", "phone": "3331234567" }
+
+### PUT /customers senza campi → 422
+PUT {{baseUrl}}/customers/{{createCustomer.response.body.data.id}}
+Content-Type: application/json
+
+{}
+
+### JSON malformato → 400 INVALID_JSON
+POST {{baseUrl}}/accounts
+Content-Type: application/json
+
+{ "ownerId":
+
+### Header sensibili → nei log compaiono come [REDACTED]
+GET {{baseUrl}}/accounts
+Authorization: Bearer secret-token-123
+Cookie: sid=abc123
+
+### Route inesistente → 404 ROUTE_NOT_FOUND
+GET {{baseUrl}}/foo
+
+#####################################################################
+# CLEANUP
+#####################################################################
+
+### DELETE /accounts/:id → 204
+DELETE {{baseUrl}}/accounts/{{createAccount.response.body.data.id}}
+
+### DELETE /customers/:id → 204
+DELETE {{baseUrl}}/customers/{{createCustomer.response.body.data.id}}
+
+#####################################################################
+# TRANSFER (G5) — richiede `npx prisma db seed`
+# IT60…3456 = 1000.00 | IT28…1208 = 500.00 | IT02…2854 = chiuso
+#####################################################################
+
+### T1. Bonifico valido → 201, saldi aggiornati, record Transfer creato
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+
+{
+  "fromIban": "IT60X0542811101000000123456",
+  "toIban": "IT28W8000000292100645211208",
+  "amount": "100.50",
+  "description": "Affitto"
+}
+
+### T2. Importo superiore al saldo → 409 INSUFFICIENT_FUNDS, saldi invariati (rollback)
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+
+{
+  "fromIban": "IT60X0542811101000000123456",
+  "toIban": "IT28W8000000292100645211208",
+  "amount": "999999.00"
+}
+
+### T3. IBAN inesistente → 404
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+
+{
+  "fromIban": "IT60X0542811101000000123456",
+  "toIban": "IT99X0000000000000000000000",
+  "amount": "10.00"
+}
+
+### T4. Conto chiuso → 409 ACCOUNT_NOT_ACTIVE
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+
+{
+  "fromIban": "IT60X0542811101000000123456",
+  "toIban": "IT02A0300203280000400162854",
+  "amount": "10.00"
+}
+
+### T5. Validazione: importo negativo e stesso conto → 422
+POST {{baseUrl}}/transfers
+Content-Type: application/json
+
+{
+  "fromIban": "IT60X0542811101000000123456",
+  "toIban": "IT60X0542811101000000123456",
+  "amount": -5
+}
+
+### T6. Verifica saldi dopo i bonifici
+GET {{baseUrl}}/accounts
+
+##############################################################
+
+#####################################################################
+# AUTH (Giorno 6) — i cookie httpOnly sono gestiti dal client REST
+#####################################################################
+
+### A1. POST /auth/register → 201
+POST {{baseUrl}}/auth/register
+Content-Type: application/json
+
+{ "email": "test@liparibank.it", "password": "Password123!", "firstName": "Mario", "lastName": "Rossi" }
+
+### A2. POST /auth/login → 200 + Set-Cookie access_token / refresh_token (HttpOnly; SameSite=Lax)
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{ "email": "test@liparibank.it", "password": "Password123!" }
+
+### A3. GET /auth/me → 200 { id, email, role }
+GET {{baseUrl}}/auth/me
+
+### A4. GET /accounts → 200 con cookie (401 senza)
+GET {{baseUrl}}/accounts
+
+### A5. POST /auth/refresh → 200 + nuovi cookie (il vecchio refresh token non vale più)
+POST {{baseUrl}}/auth/refresh
+
+### A6. DELETE /accounts/:id → 403 con ruolo USER (204/404 con ADMIN)
+DELETE {{baseUrl}}/accounts/00000000-0000-0000-0000-000000000000
+
+### A7. POST /auth/logout → 204, cookie cancellati
+POST {{baseUrl}}/auth/logout

@@ -1,0 +1,134 @@
+// Naming: camelCase nel codice, snake_case nel DB (@map per i campi, @@map per le tabelle)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CustomerStatus {
+  ACTIVE
+  INACTIVE
+
+  @@map("customer_status")
+}
+
+enum AccountType {
+  CHECKING
+  SAVINGS
+  BUSINESS
+
+  @@map("account_type")
+}
+
+enum AccountStatus {
+  ACTIVE
+  BLOCKED
+  CLOSED
+
+  @@map("account_status")
+}
+
+enum TransferStatus {
+  PENDING
+  COMPLETED
+  FAILED
+
+  @@map("transfer_status")
+}
+
+model Customer {
+  id         String         @id @default(uuid()) @db.Uuid
+  fiscalCode String         @unique @map("fiscal_code") @db.VarChar(16)
+  firstName  String         @map("first_name") @db.VarChar(100)
+  lastName   String         @map("last_name") @db.VarChar(100)
+  email      String         @unique
+  phone      String         @db.VarChar(25)
+  status     CustomerStatus @default(ACTIVE)
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+
+  accounts Account[]
+  user     User?
+
+  @@map("customers")
+}
+
+model Account {
+  id        String        @id @default(uuid()) @db.Uuid
+  iban      String        @unique @db.VarChar(27)
+  // Decimal(15,2): importi bancari esatti (un Float perderebbe centesimi)
+  balance   Decimal       @default(0) @db.Decimal(15, 2)
+  type      AccountType
+  status    AccountStatus @default(ACTIVE)
+  ownerId   String        @map("owner_id") @db.Uuid
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  // Restrict: un cliente con conti non si cancella (i dati bancari non spariscono a cascata)
+  owner        Customer   @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  transfersOut Transfer[] @relation("TransferFrom")
+  transfersIn  Transfer[] @relation("TransferTo")
+
+  // Copre "i conti di un cliente filtrati per stato"
+  @@index([ownerId, status])
+  @@map("accounts")
+}
+
+model Transfer {
+  id            String         @id @default(uuid()) @db.Uuid
+  fromAccountId String         @map("from_account_id") @db.Uuid
+  toAccountId   String         @map("to_account_id") @db.Uuid
+  amount        Decimal        @db.Decimal(15, 2)
+  description   String?        @db.VarChar(140)
+  status        TransferStatus @default(PENDING)
+  executedAt    DateTime?      @map("executed_at")
+  createdAt     DateTime       @default(now()) @map("created_at")
+
+  fromAccount Account @relation("TransferFrom", fields: [fromAccountId], references: [id], onDelete: Restrict)
+  toAccount   Account @relation("TransferTo", fields: [toAccountId], references: [id], onDelete: Restrict)
+
+  // Le FK in Postgres non creano indici da sole: servono per lo storico di un conto
+  @@index([fromAccountId])
+  @@index([toAccountId])
+  @@map("transfers")
+}
+
+enum Role {
+  USER
+  OPERATOR
+  ADMIN
+
+  @@map("role")
+}
+
+model User {
+  id           String    @id @default(uuid()) @db.Uuid
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         Role      @default(USER)
+  // 1:1 opzionale con il cliente bancario (un operatore/admin può non avere un Customer)
+  customerId   String?   @unique @map("customer_id") @db.Uuid
+  customer     Customer? @relation(fields: [customerId], references: [id])
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+// Refresh token lato server (rotation): `id` è il claim jti del JWT. Un token è utilizzabile UNA sola volta:
+// al refresh viene revocato e sostituito. Se un token già revocato viene ripresentato → furto: si revocano tutti.
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt DateTime  @map("expires_at")
+  revokedAt DateTime? @map("revoked_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}

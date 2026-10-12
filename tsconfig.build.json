@@ -1,0 +1,10 @@
+// Build di produzione: solo src/, senza i test (che vivono anche accanto al codice: src/**/*.test.ts)
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/**/*.test.ts"]
+}

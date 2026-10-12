@@ -1,0 +1,21 @@
+# Postgres usa-e-getta per i test: i dati stanno in RAM (tmpfs), spariscono a ogni `down`, nessun volume.
+# Avvio: npm run db:test:up    Stop: npm run db:test:down
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    container_name: liparibank-test-db
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: liparibank_test
+      POSTGRES_PASSWORD: liparibank_test_pw
+      POSTGRES_DB: liparibank_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    # Durabilità inutile per i test: senza fsync le scritture sono molto più veloci
+    command: ["postgres", "-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U liparibank_test -d liparibank_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
